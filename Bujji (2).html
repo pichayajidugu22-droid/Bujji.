@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bujji</title>
+<script>window.MathJax={svg:{fontCache:"local"},startup:{typeset:false}};</script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-svg.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+:root{--bg:#02060d;--fg:#9fefff;--dim:#5b8da0;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#02060d;--fg:#9fefff;--dim:#5b8da0}}
+:root[data-theme="dark"]{--bg:#02060d;--fg:#9fefff;--dim:#5b8da0}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:300 14px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;overflow:hidden;-webkit-user-select:none;user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#ui{position:fixed;left:0;right:0;bottom:0;padding:0 24px calc(env(safe-area-inset-bottom,0px) + 6vh);text-align:center;pointer-events:none}
+#name{letter-spacing:.7em;margin-right:-.7em;font-weight:200;font-size:15px;opacity:.85}
+#cap{max-height:6em;overflow-y:auto;-webkit-overflow-scrolling:touch;pointer-events:auto;min-height:3.2em;margin:14px auto 0;max-width:34em;color:var(--dim);font-size:15px;white-space:pre-line;-webkit-user-select:text;user-select:text;scrollbar-width:thin}
+#sheet{position:fixed;left:12px;right:12px;top:35vh;bottom:var(--uih,160px);max-width:900px;margin:0 auto;overflow-y:auto;padding:14px 16px;border:1px solid rgba(60,240,255,.28);border-radius:14px;background:rgba(6,22,34,.84);color:#e6fbff;-webkit-user-select:text;user-select:text}
+#sheet[hidden]{display:none}
+#sheet h2{margin:0 0 6px;font-weight:300;font-size:17px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg)}
+#sheet h3{margin:16px 0 6px;padding-bottom:4px;font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:#4fd8ff;border-bottom:1px solid rgba(60,240,255,.2)}
+#sheet .r{display:grid;grid-template-columns:minmax(70px,36%) 1fr;gap:12px;align-items:center;padding:6px 0}
+#sheet .l{color:var(--dim);font-size:13px}
+#sheet .n{margin-top:4px;font-size:13.5px;line-height:1.6;color:#cfeff7;white-space:pre-line}
+#sheet .f{overflow-x:auto;overflow-y:hidden}
+#sheet mjx-container{margin:0!important}
+.sh #name{display:none}
+#lang{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);right:12px;z-index:5;max-width:46vw;background:rgba(6,22,34,.85);color:var(--fg);border:1px solid rgba(60,240,255,.3);border-radius:8px;padding:6px 8px;font:inherit;font-size:13px}
+#tx{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:12px;z-index:5;width:calc(100% - 170px);max-width:420px;box-sizing:border-box;background:rgba(6,22,34,.85);color:var(--fg);border:1px solid rgba(60,240,255,.3);border-radius:8px;padding:7px 10px;font:inherit;font-size:13px;-webkit-user-select:text;user-select:text}
+#links{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:14px;pointer-events:auto}
+#links a{padding:7px 12px;border:1px solid rgba(60,240,255,.4);border-radius:18px;background:rgba(6,22,34,.85);color:var(--fg);text-decoration:none;font-size:13px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="sheet" hidden></div>
+<input id="tx" type="text" placeholder="Type here if voice isn’t available…" autocomplete="off" enterkeyhint="send">
+<select id="lang" aria-label="Language"></select>
+<div id="ui"><div id="links"></div><div id="name">B.U.J.J.I</div><div id="cap"></div></div>
+<script>
+(function(){
+"use strict";
+var cv=document.getElementById("c"),g=cv.getContext("2d"),cap=document.getElementById("cap");
+var W=0,H=0,state="idle",lvl=0,bump=0,t0=performance.now();
+var COL={idle:[40,170,255],listen:[60,240,255],think:[255,176,64],speak:[120,255,190]};
+var cur=COL.idle.slice(),P=[];
+for(var q=0;q<48;q++)P.push({a:Math.random()*6.283,r:Math.random(),s:.2+Math.random()*.6});
+function size(){var D=Math.min(window.devicePixelRatio||1,2);W=innerWidth;H=innerHeight;cv.width=W*D;cv.height=H*D;g.setTransform(D,0,0,D,0,0)}
+var uiEl=document.getElementById("ui");
+function fit(){document.documentElement.style.setProperty("--uih",(uiEl.offsetHeight+12)+"px")}
+try{new ResizeObserver(fit).observe(uiEl)}catch(e){}
+addEventListener("resize",fit);fit();
+addEventListener("resize",size);size();
+cv.addEventListener("pointerdown",function(){if(speaking||busy){stopTalk();say("Stopped. Tap anywhere or speak.",1)}});
+function rgba(a){return "rgba("+Math.round(cur[0])+","+Math.round(cur[1])+","+Math.round(cur[2])+","+a+")"}
+
+/* ---------- voice engine ---------- */
+var SR=window.SpeechRecognition||window.webkitSpeechRecognition,rec=null,micOK=true;
+var speaking=false,busy=false,awake=0,qu=0,hist=[],voice=null,sample=null,capT,last=null,dl=null;
+var WAKE=/\b(bujji|buji|bujjy|bhujji|bhuji|bujjee|bunji|boojji)\b[\s,.:!?-]*/i;
+var SYS='You are Bujji, a fast, calm voice assistant that can help with anything, such as general knowledge, science, technology, coding, history, health, languages, writing, current affairs and everyday life. Whatever the topic, research it thoroughly and explain it with the depth, rigor and clarity of an expert tutor: build concepts from first principles, cover the key details, worked examples, common mistakes and related ideas, and be accurate. Never mention JEE, exams, syllabus or topic categories unless the user brings them up, never say a question is outside your focus, and never comment on how brief or detailed your answer is; simply answer fully, like a knowledgeable AI. Reply with ONLY one JSON object with keys in exactly this order: {"lang":"BCP-47 code of the language you reply in, such as te-IN or hi-IN","speech":"...","links":[],"pdf":false,"sheet":null}. Always reply in the language the user spoke (or the preferred language if one is given), written in that language’s own script. "speech" is spoken aloud as a clear, complete explanation in plain spoken sentences: one or two sentences for greetings and simple facts, and about four to eight sentences for any real question; no markdown or symbols, never your own name. "links" is for anything the user may want to learn, watch, buy, visit or look up: give 2 to 4 entries {"k":"video|web|map|image","q":"short search query","t":"short label in the user’s language"}; use video for lessons, tutorials and how-tos; otherwise leave []. When you give links, say in speech that suggestions are on screen. Whenever the user asks anything that deserves depth (how or why questions, concepts, topics, comparisons, research, plans, derivations, formulas, step-by-step working, revision notes), fill "sheet" with {"title":"...","sections":[{"h":"Subtopic","items":[{"l":"name of the item","t":"valid LaTeX math without dollar signs, or empty string if no math","n":"short plain-text explanation"}]}]} containing complete, accurate, in-depth content: about 10 to 25 items grouped by subtopic, covering definitions, key ideas, details, examples and pitfalls. "title", "h", "l" and "n" are written in the language you reply in, in its own native script, with correct grammar, natural phrasing and the standard technical terms of that language. "t" holds only pure math symbols as LaTeX (never words of any language; empty string if the item has no math). "n" is a clear notation note in that language: what each symbol means, the idea, the steps and common mistakes. Then "speech" explains the main ideas aloud in plain words, never reading formulas or symbols, and mentions that the sheet is on screen. Set "pdf" to true only if the user asks for a PDF, download or export; if they want a PDF of the sheet already on screen, leave "sheet" null. For greetings, small talk and simple quick facts leave "sheet" null and answer in "speech". If unsure of something current, say so briefly.';
+
+function useCap(n){try{if(window.claude&&typeof window.claude.use==="function")return Promise.resolve(window.claude.use(n))}catch(e){}return Promise.resolve(null)}
+function say(txt){cap.style.opacity=1;cap.textContent=txt}
+
+function recLang(){return LANG||navigator.language||"en-IN"}
+function listen(){
+  if(!SR){say("Voice recognition isn’t available in this view. Open this link in Chrome.",1);return}
+  rec=new SR();rec.continuous=true;rec.interimResults=true;rec.lang=recLang();
+  rec.onresult=function(e){
+    for(var i=e.resultIndex;i<e.results.length;i++){
+      hear(e.results[i][0].transcript,e.results[i].isFinal)
+    }
+  };
+  rec.onerror=function(e){
+    if(e.error==="not-allowed"||e.error==="service-not-allowed"){micOK=false;say("Microphone access is blocked. Allow it for this page, or open the link in Chrome.",1)}
+  };
+  rec.onstart=function(){live=true};
+  rec.onend=function(){live=false;if(micOK)setTimeout(start,200)};
+  start()
+}
+function start(){try{rec.lang=recLang();rec.start()}catch(e){}}
+
+function isStop(z){
+  z=z.replace(/\b(please|talking|speaking|now|it|bujji|buji|bujjy|just|be)\b/g,"").replace(/\s+/g," ").trim();
+  return STOP.test(z)
+}
+function echo(tx){
+  var s=(sp.said||"").toLowerCase(),w=tx.toLowerCase().replace(/[.!?,।]/g,"").split(/\s+/).filter(Boolean);
+  if(!w.length)return true;
+  var n=0;w.forEach(function(x){if(s.indexOf(x)>=0)n++});
+  return n/w.length>=.6
+}
+function heard(tx){
+  var m=tx.match(WAKE);if(m&&m.index>8)m=null;
+  var cmd=m?tx.slice(m.index+m[0].length).trim():tx.trim();
+  if(speaking||busy)stopTalk();
+  if(!cmd){reply("Yes?");return}
+  act(cmd)
+}
+
+var TD=/^(what(.s| is) )?(the )?(current )?(time|date|day)( is it| today| now)?$|what time is it|what day is it|what.s today.s date/;
+var PK={whatsapp:"com.whatsapp",youtube:"com.google.android.youtube",instagram:"com.instagram.android",chrome:"com.android.chrome",telegram:"org.telegram.messenger",spotify:"com.spotify.music",phonepe:"com.phonepe.app",gpay:"com.google.android.apps.nbu.paisa.user","google pay":"com.google.android.apps.nbu.paisa.user",paytm:"net.one97.paytm",gmail:"com.google.android.gm",maps:"com.google.android.apps.maps","google maps":"com.google.android.apps.maps",facebook:"com.facebook.katana",snapchat:"com.snapchat.android",amazon:"in.amazon.mShop.android.shopping",flipkart:"com.flipkart.android",netflix:"com.netflix.mediaclient"},PA={settings:"android.settings.SETTINGS",camera:"android.media.action.IMAGE_CAPTURE",wifi:"android.settings.WIFI_SETTINGS",bluetooth:"android.settings.BLUETOOTH_SETTINGS"};
+function phoneLinks(a){var box=document.getElementById("links");box.innerHTML="";a.forEach(function(x){var el=document.createElement("a");el.href=x[1];el.textContent=x[0];el.onclick=function(ev){ev.preventDefault();var u=x[1];[function(){window.top.location.href=u},function(){window.location.href=u},function(){window.open(u,"_blank")}].some(function(f){try{f();return 1}catch(e){return 0}});if(/^tel:/.test(u)){var n=u.slice(4);try{navigator.clipboard.writeText(n)}catch(e){}reply("If the dialer did not open, dial "+n+" yourself. I copied the number.")}};box.appendChild(el)});document.body.classList.toggle("hl",a.length>0)}
+var DW={zero:0,oh:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9};
+function hd(w){return Object.prototype.hasOwnProperty.call(DW,w)}
+function dw(w){return hd(w)||/^\+?\d+$/.test(w)||w==="double"||w==="triple"||w==="plus"}
+function dg(s){var o="",r=1,p=s.trim().split(/[\s-]+/);for(var i=0;i<p.length;i++){var w=p[i];if(w==="double")r=2;else if(w==="triple")r=3;else if(w==="plus")o+="+";else if(hd(w)){o+=String(DW[w]).repeat(r);r=1}else if(/^\+?\d+$/.test(w)){o+=w;r=1}else return ""}return o.length>=3?o:""}
+function phoneCmd(l){
+  var m,C={};try{C=JSON.parse(localStorage.getItem("jc")||"{}")}catch(e){}
+  if((m=l.match(/^save contact (.+)$/))){var w=m[1].split(/\s+/),i=w.length;while(i>0&&dw(w[i-1]))i--;var nm=w.slice(0,i).join(" "),nb=dg(w.slice(i).join(" "));if(nm&&nb.length>=7){C[nm]=nb;try{localStorage.setItem("jc",JSON.stringify(C))}catch(e){}return{speech:"Saved "+nm+". Say call "+nm+" any time."}}return{speech:"Say: save contact, then a name, then the number."}}
+  if(/^(answer|pick up|lift|accept|receive)( the| my| this)?( incoming)? (call|phone)$/.test(l))return{speech:"A web page can't answer calls. Use your phone's green button, or Google Assistant's answer call command."};
+  if((m=l.match(/^(?:call|dial|phone|ring) (.+)$/))){var t=m[1].trim(),n=C[t]||dg(t);
+    if(!n)return{speech:"I don't have a number for "+t+". Say save contact "+t+" followed by the number, or say the number itself."};
+    return{speech:"Tap the call button to dial "+t+".",links:[["📞 Call "+t,"tel:"+n]]}}
+  if((m=l.match(/^(?:open|launch|start|go to) (.+)$/))){var a=m[1].replace(/^the /,"").replace(/\s*app$/,"").trim();
+    if(/sheet|formula|pdf|panel/.test(a))return null;
+    var h=PA[a]?"intent:#Intent;action="+PA[a]+";end":PK[a]?"intent://#Intent;package="+PK[a]+";end":"https://play.google.com/store/search?q="+encodeURIComponent(a)+"&c=apps";
+    return{speech:"Tap the button to open "+a+".",links:[["📱 Open "+a,h]]}}
+  return null
+}
+function act(c){
+  var km=c.match(/^\/key\s+(gemini|groq)\s+(\S+)(?:\s+(\S+))?/i);
+  if(km){try{localStorage.setItem("jk",JSON.stringify({p:km[1].toLowerCase(),k:km[2],m:km[3]}))}catch(e){}reply("Saved. I will use your "+km[1]+" key for answers.");return}
+  if(/^\/key\s+off/i.test(c)){try{localStorage.removeItem("jk")}catch(e){}reply("Key removed.");return}
+  var l=c.toLowerCase().replace(/[.!?,]/g,"").trim();
+  if(isStop(l)){stopTalk();say("Stopped.",1);return}
+  if(VW.test(l)&&l.split(" ").length<9&&(FW.test(l)||MW.test(l))){GEN=FW.test(l)?"female":"male";try{localStorage.setItem("jg",GEN)}catch(e){}reply(GEN==="female"?"Okay, switching to a female voice.":"Okay, switching to a male voice.");return}
+  if(/^(close|hide|dismiss|clear)( the)?( formula)?( sheet| formulas| panel| screen)?$/.test(l)){showSheet(null);reply("Closed.");return}
+  if(/^(show|open|bring up)( the)?( formula)?( sheet| formulas| panel)( again)?$/.test(l)&&last){showSheet(last);reply("Here it is.");return}
+  if(/(^| )(pdf|download|export)( |$)/.test(l)&&last&&l.split(" ").length<5){reply("Preparing your PDF.");pdf(last);return}
+  var ph=phoneCmd(l);if(ph){phoneLinks(ph.links||[]);reply(ph.speech);var fa=document.querySelector("#links a");if(fa)setTimeout(function(){fa.click()},900);return}
+  if(TD.test(l)){
+    var d=new Date();
+    reply(/date|day/.test(l)?"Today is "+d.toLocaleDateString([],{weekday:"long",day:"numeric",month:"long",year:"numeric"})+".":"It is "+d.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+".");
+    return
+  }
+  ask(c)
+}
+
+var SHEETQ=/formula|sheet|derivation|revision|notes|equation|pdf|download|export|फॉर्मूला|सूत्र|ఫార్ములా|సూత్ర|சூத்திர|ಸೂತ್ರ|സൂത്ര|সূত্র/i;
+function mkLinks(a){
+  var box=document.getElementById("links"),n=0;box.innerHTML="";
+  (Array.isArray(a)?a:[]).slice(0,4).forEach(function(k){
+    var q=String(k&&k.q||"").slice(0,120).trim();if(!q)return;
+    var u=k.k==="video"?"https://www.youtube.com/results?search_query=":k.k==="map"?"https://www.google.com/maps/search/?api=1&query=":k.k==="image"?"https://www.google.com/search?tbm=isch&q=":"https://www.google.com/search?q=";
+    var el=document.createElement("a");el.href=u+encodeURIComponent(q);el.target="_blank";el.rel="noopener noreferrer";
+    el.textContent=(k.k==="video"?"▶ ":k.k==="map"?"📍 ":k.k==="image"?"🖼 ":"🔎 ")+String(k.t||q).slice(0,40);box.appendChild(el);n++
+  });
+  document.body.classList.toggle("hl",n>0)
+}
+function stream(t){
+  var m=/"lang"\s*:\s*"([^"]*)"/.exec(t);if(m)sp.lang=m[1];
+  var s=/"speech"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(t);if(!s)return;
+  var x;try{x=JSON.parse('"'+s[1].replace(/\\$/,"")+'"')}catch(e){return}
+  cap.style.opacity=1;cap.textContent=x;cap.scrollTop=cap.scrollHeight;
+  var re=/[.!?।。！？](?=\s)/g,cut=0,r;
+  while((r=re.exec(x)))cut=r.index+1;
+  if(cut>sp.n){enq(x.slice(sp.n,cut));sp.n=cut}
+}
+/* ---------- own engine: works without Claude or any limit ---------- */
+var KB=[];
+(function(){var cu,sc;String.raw`@kinematics|projectile|equations of motion|uniform acceleration::Kinematics
+#Straight-line motion
+First equation|v=u+at|Constant acceleration; u is initial and v final velocity.
+Displacement|s=ut+\tfrac{1}{2}at^{2}|Use signs for direction.
+Velocity-displacement|v^{2}=u^{2}+2as|Handy when time is not given.
+Distance in nth second|s_n=u+\tfrac{a}{2}(2n-1)|Only that one second.
+#Projectile
+Range|R=\frac{u^{2}\sin 2\theta}{g}|Maximum at 45 degrees.
+Maximum height|H=\frac{u^{2}\sin^{2}\theta}{2g}|Uses the vertical component only.
+Time of flight|T=\frac{2u\sin\theta}{g}|Level ground.
+@newton|work-energy|work done|kinetic energy|friction|momentum|collision::Laws of Motion, Work and Energy
+#Laws and friction
+Newton second law|F=ma|Net force; a vector equation.
+Limiting friction|f_{max}=\mu N|Kinetic friction uses the kinetic coefficient.
+Incline acceleration|a=g(\sin\theta-\mu\cos\theta)|Sliding down a rough incline.
+Momentum|p=mv|Conserved when no external force acts.
+#Work, energy, power
+Work|W=Fs\cos\theta|Dot product of force and displacement.
+Kinetic energy|K=\tfrac{1}{2}mv^{2}|Work-energy theorem: W equals change in K.
+Spring energy|U=\tfrac{1}{2}kx^{2}|Spring stretched by x.
+Power|P=\frac{W}{t}=Fv|Average and instantaneous.
+Restitution|e=\frac{v_2-v_1}{u_1-u_2}|e=1 elastic, e=0 perfectly inelastic.
+@rotation|rotational|torque|moment of inertia|angular momentum::Rotational Motion
+#Key relations
+Torque|\tau=I\alpha|About a fixed axis.
+Angular momentum|L=I\omega|Conserved when net torque is zero.
+Rolling kinetic energy|K=\tfrac{1}{2}mv^{2}\left(1+\frac{k^{2}}{R^{2}}\right)|k is the radius of gyration.
+Parallel axis theorem|I=I_{cm}+Md^{2}|Axis parallel to the one through the centre.
+Solid sphere|I=\tfrac{2}{5}MR^{2}|About a diameter. Ring is MR squared, disc is half of that.
+@shm|oscillation|simple harmonic|pendulum::Simple Harmonic Motion
+#SHM
+Displacement|x=A\sin(\omega t+\phi)|Amplitude A, angular frequency omega.
+Condition|a=-\omega^{2}x|Acceleration proportional to displacement, opposite in direction.
+Spring period|T=2\pi\sqrt{\frac{m}{k}}|Independent of amplitude.
+Pendulum period|T=2\pi\sqrt{\frac{L}{g}}|Small angles only.
+Velocity|v=\omega\sqrt{A^{2}-x^{2}}|Maximum A times omega at the mean position.
+Total energy|E=\tfrac{1}{2}m\omega^{2}A^{2}|Constant.
+@electrostat|coulomb|electric field|capacitor|gauss::Electrostatics
+#Fields and potential
+Coulomb law|F=\frac{1}{4\pi\varepsilon_0}\frac{q_1q_2}{r^{2}}|Along the line joining the charges.
+Point charge field|E=\frac{kq}{r^{2}}|k is 9 times 10 to the 9.
+Potential|V=\frac{kq}{r}|Scalar; add algebraically.
+Gauss law|\oint \vec E\cdot d\vec A=\frac{q_{enc}}{\varepsilon_0}|Choose a symmetric surface.
+#Capacitors
+Parallel plate|C=\frac{\varepsilon_0 A}{d}|Capacitance.
+Energy stored|U=\tfrac{1}{2}CV^{2}|Equal to Q squared over 2C.
+Series|\frac{1}{C}=\frac{1}{C_1}+\frac{1}{C_2}|In parallel the capacitances add.
+@current electricity|ohm|kirchhoff|wheatstone|resistivity::Current Electricity
+#Circuits
+Ohm law|V=IR|For ohmic conductors.
+Resistance|R=\rho\frac{l}{A}|Depends on material and temperature.
+Power|P=VI=I^{2}R|Heat in a resistor.
+Cell with internal resistance|V=\varepsilon-Ir|Terminal voltage.
+Kirchhoff rules|\sum I=0,\ \sum V=0|Junction rule and loop rule.
+Wheatstone balance|\frac{P}{Q}=\frac{R}{S}|No galvanometer current.
+@thermodynamic|ideal gas|gas law|carnot|kinetic theory|entropy::Thermodynamics
+#Gases and laws
+Ideal gas|PV=nRT|R is 8.314 joule per mole kelvin.
+First law|\Delta U=Q-W|W is work done by the gas.
+Isothermal work|W=nRT\ln\frac{V_2}{V_1}|Change in internal energy is zero.
+Adiabatic|PV^{\gamma}=\text{constant}|Gamma is Cp over Cv.
+Carnot efficiency|\eta=1-\frac{T_2}{T_1}|Temperatures in kelvin.
+RMS speed|v_{rms}=\sqrt{\frac{3RT}{M}}|Kinetic theory.
+@optics|lens|mirror|refraction|snell|interference|young::Ray and Wave Optics
+#Optics
+Mirror formula|\frac{1}{v}+\frac{1}{u}=\frac{1}{f}|Apply sign convention; f is R by 2.
+Lens formula|\frac{1}{v}-\frac{1}{u}=\frac{1}{f}|Cartesian sign convention.
+Snell law|n_1\sin i=n_2\sin r|Refraction at a surface.
+Lens maker|\frac{1}{f}=(n-1)\left(\frac{1}{R_1}-\frac{1}{R_2}\right)|Lens in air.
+Fringe width|\beta=\frac{\lambda D}{d}|Young double slit.
+@mole concept|\bmoles?\b|stoichiometry|molarity|molality::Mole Concept
+#Concentration
+Moles|n=\frac{m}{M}=\frac{N}{N_A}|Avogadro number is 6.022 times 10 to the 23.
+Molarity|M=\frac{n_{solute}}{V_{L}}|Moles per litre of solution.
+Molality|m=\frac{n_{solute}}{kg_{solvent}}|Independent of temperature.
+Mole fraction|\chi_A=\frac{n_A}{n_A+n_B}|All fractions add to 1.
+Dilution|M_1V_1=M_2V_2|Moles stay the same.
+@equilibrium|le chatelier|\bkp\b|\bkc\b|buffer|ph value::Chemical and Ionic Equilibrium
+#Equilibrium
+Kc|K_c=\frac{[C]^{c}[D]^{d}}{[A]^{a}[B]^{b}}|Equilibrium concentrations.
+Kp and Kc|K_p=K_c(RT)^{\Delta n}|Delta n is gaseous moles of products minus reactants.
+Reaction quotient|Q<K\Rightarrow\text{forward}|If Q is greater than K the reaction goes backward.
+pH|pH=-\log[H^{+}]|pH plus pOH is 14 at 25 degrees Celsius.
+Henderson|pH=pK_a+\log\frac{[A^-]}{[HA]}|Buffer solutions.
+Ostwald dilution|K_a=c\alpha^{2}|Weak electrolyte with small alpha.
+@quadratic|discriminant|roots of::Quadratic Equations
+#Quadratics
+Roots|x=\frac{-b\pm\sqrt{b^{2}-4ac}}{2a}|For ax squared plus bx plus c.
+Discriminant|D=b^{2}-4ac|Positive: real and distinct. Zero: equal. Negative: complex.
+Sum of roots|\alpha+\beta=-\frac{b}{a}|Vieta relation.
+Product of roots|\alpha\beta=\frac{c}{a}|Vieta relation.
+@trigonometry|trig|identities::Trigonometry
+#Identities
+Pythagorean|\sin^{2}x+\cos^{2}x=1|Also 1 plus tan squared is sec squared.
+Sum formula|\sin(A+B)=\sin A\cos B+\cos A\sin B|Cosine: cosAcosB minus sinAsinB.
+Double angle|\sin 2x=2\sin x\cos x|cos 2x is 2cos squared x minus 1.
+Tangent sum|\tan(A+B)=\frac{\tan A+\tan B}{1-\tan A\tan B}|Watch the denominator.
+Sine rule|\frac{a}{\sin A}=\frac{b}{\sin B}=2R|R is circumradius.
+Cosine rule|a^{2}=b^{2}+c^{2}-2bc\cos A|Any triangle.
+@derivative|differentiation|integration|calculus|limits|integral::Calculus
+#Derivatives
+Power rule|\frac{d}{dx}x^{n}=nx^{n-1}|Basic rule.
+Product rule|(uv)'=u'v+uv'|Two functions multiplied.
+Chain rule|\frac{dy}{dx}=\frac{dy}{du}\frac{du}{dx}|Composite functions.
+Exponential|\frac{d}{dx}e^{x}=e^{x}|The log of x gives 1 over x.
+#Integrals
+Power|\int x^{n}dx=\frac{x^{n+1}}{n+1}+C|n not equal to minus 1.
+Reciprocal|\int\frac{dx}{x}=\ln\lvert x\rvert+C|Special case.
+By parts|\int u\,dv=uv-\int v\,du|Choose u by ILATE.
+Standard limit|\lim_{x\to0}\frac{\sin x}{x}=1|Angle in radians.
+@progression|sequence|binomial|arithmetic|geometric::Sequences and Binomial Theorem
+#Formulas
+AP nth term|a_n=a+(n-1)d|Arithmetic progression.
+AP sum|S_n=\frac{n}{2}\left[2a+(n-1)d\right]|First n terms.
+GP nth term|a_n=ar^{n-1}|Geometric progression.
+GP infinite sum|S_\infty=\frac{a}{1-r}|Needs the magnitude of r below 1.
+Binomial term|T_{r+1}=\binom{n}{r}x^{r}a^{n-r}|General term of a plus x to the n.
+@straight line|circle|coordinate geometry|conic|parabola|ellipse::Coordinate Geometry
+#Formulas
+Distance|d=\sqrt{(x_2-x_1)^{2}+(y_2-y_1)^{2}}|Between two points.
+Two-point line|y-y_1=\frac{y_2-y_1}{x_2-x_1}(x-x_1)|Line through two points.
+Point to line|d=\frac{\lvert ax_1+by_1+c\rvert}{\sqrt{a^{2}+b^{2}}}|Perpendicular distance.
+Circle|(x-h)^{2}+(y-k)^{2}=r^{2}|Centre (h, k).
+Parabola|y^{2}=4ax|Focus at (a, 0).
+Ellipse|\frac{x^{2}}{a^{2}}+\frac{y^{2}}{b^{2}}=1|e squared is 1 minus b squared over a squared.`.split("\n").forEach(function(ln){
+  if(ln[0]==="@"){var p=ln.slice(1).split("::");cu={k:new RegExp("\\b(?:"+p[0]+")","i"),title:p[1],sections:[]};KB.push(cu)}
+  else if(ln[0]==="#"){sc={h:ln.slice(1),items:[]};cu.sections.push(sc)}
+  else if(ln.trim()){var q=ln.split("|");sc.items.push({l:q[0],t:q[1],n:q[2]||""})}
+})})();
+function kbFind(l){
+  for(var i=0;i<KB.length;i++)if(KB[i].k.test(l))return{lang:"en-IN",speech:"Here are the "+KB[i].title+" formulas. The sheet is on screen. Say PDF to download it.",links:[{k:"video",q:KB[i].title+" JEE lecture",t:"Video lesson"}],sheet:{title:KB[i].title,sections:KB[i].sections}};
+  return null
+}
+function calc(l){
+  var s=l.replace(/\b(what is|what's|calculate|compute|solve|find|equals?)\b/g," ").replace(/,/g,"")
+    .replace(/square root of ([\d.]+)/g,"sqrt($1)").replace(/\bplus\b/g,"+").replace(/\bminus\b/g,"-")
+    .replace(/\b(divided by|over)\b/g,"/").replace(/\b(times|multiplied by|into)\b/g,"*").replace(/\bto the power( of)?\b/g,"^")
+    .replace(/(\d)\s*x\s*(\d)/g,"$1*$2").replace(/[=?]/g," ").trim();
+  if(!/\d/.test(s)||!/[+\-*\/^%]|sqrt|sin|cos|tan|log|ln|abs/.test(s))return null;
+  if(/[^\d\s+\-*\/().^%]/.test(s.replace(/\b(sqrt|sin|cos|tan|log|ln|abs|pi)\b/g,"")))return null;
+  var js=s.replace(/\^/g,"**").replace(/\b(sqrt|abs)\b/g,"Math.$1").replace(/\b(sin|cos|tan)\(([^()]*)\)/g,"Math.$1(($2)*Math.PI/180)").replace(/\blog\(/g,"Math.log10(").replace(/\bln\(/g,"Math.log(").replace(/\bpi\b/g,"Math.PI");
+  try{var r=Function('"use strict";return ('+js+')')();if(typeof r!=="number"||!isFinite(r))return{speech:"That is undefined.",lang:"en-IN"};
+    return{speech:"The answer is "+(+r.toPrecision(10))+".",lang:"en-IN"}}catch(e){return null}
+}
+function J(o){return{text:JSON.stringify(o)}}
+function KEY(){try{return JSON.parse(localStorage.getItem("jk")||"null")}catch(e){return null}}
+var kerr=null;
+async function viaKey2(prompt){
+  var k=KEY();if(!k)throw 0;kerr=null;say("Thinking...");
+  var ms=k.p==="gemini"?(k.m?[k.m]:["gemini-flash-latest","gemini-2.5-flash","gemini-2.0-flash"]):[k.m||"llama-3.3-70b-versatile"],err=null;
+  for(var i=0;i<ms.length;i++){
+    var ac=new AbortController(),tm=setTimeout(function(){ac.abort()},25000);
+    try{
+      var r=k.p==="gemini"
+        ?await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+ms[i]+":generateContent?key="+encodeURIComponent(k.k),{method:"POST",signal:ac.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json"}})})
+        :await fetch("https://api.groq.com/openai/v1/chat/completions",{method:"POST",signal:ac.signal,headers:{"Content-Type":"application/json","Authorization":"Bearer "+k.k},body:JSON.stringify({model:ms[i],messages:[{role:"user",content:prompt}],response_format:{type:"json_object"}})});
+      if(!r.ok)throw new Error("error "+r.status+" for "+ms[i]);
+      var j=await r.json();clearTimeout(tm);
+      var t=k.p==="gemini"?j.candidates[0].content.parts.map(function(p){return p.text||""}).join(""):j.choices[0].message.content;
+      return{text:t}
+    }catch(e){clearTimeout(tm);err=e&&e.name==="AbortError"?new Error("timed out"):e;if(!/error (404|400)/.test(String(err&&err.message)))throw err}
+  }
+  throw err||new Error("no model worked")
+}
+async function viaKey(prompt){
+  var k=KEY(),r,j;if(!k)throw 0;
+  if(k.p==="gemini"){
+    r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+(k.m||"gemini-flash-latest")+":generateContent?key="+encodeURIComponent(k.k),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json"}})});
+    if(!r.ok)throw r.status;j=await r.json();return{text:j.candidates[0].content.parts.map(function(p){return p.text||""}).join("")}
+  }
+  r=await fetch("https://api.groq.com/openai/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+k.k},body:JSON.stringify({model:k.m||"llama-3.3-70b-versatile",messages:[{role:"user",content:prompt}],response_format:{type:"json_object"}})});
+  if(!r.ok)throw r.status;j=await r.json();return{text:j.choices[0].message.content}
+}
+async function wiki(c){
+  var q=c.replace(/^(what is|what are|who is|who was|tell me about|explain|define)\s+(an? |the )?/i,"").replace(/[?.]+$/,"").trim();if(!q)return null;
+  var r=await fetch("https://en.wikipedia.org/w/api.php?action=query&list=search&srlimit=1&format=json&origin=*&srsearch="+encodeURIComponent(q));
+  var t=(await r.json()).query.search[0];if(!t)return null;
+  var s=await(await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/"+encodeURIComponent(t.title))).json();
+  if(!s.extract)return null;
+  return{lang:"en-IN",speech:(s.extract.match(/[^.!?]+[.!?]+/g)||[s.extract]).slice(0,4).join(" ").trim(),links:[{k:"video",q:q,t:"Videos"},{k:"web",q:q,t:"Search"}]}
+}
+var cDown=0;
+async function chain(c,prompt,opt,g){
+  var l=c.toLowerCase().replace(/[.!?,]/g,"").trim(),o=calc(l);
+  if(o)return J(o);
+  var kb=kbFind(l);
+  if(kb&&SHEETQ.test(c))return J(kb);
+  if(KEY()){try{return await viaKey2(prompt)}catch(e){kerr=e}}
+  if(Date.now()>cDown){
+    try{if(!sample&&window.claude)sample=await useCap("sample");if(sample){sp.n=0;return await sample(prompt,opt)}}
+    catch(e){if(g!==sp.g)return J({speech:""});var cd=e&&e.code;if(cd==="rate_limited")cDown=Date.now()+300000;else if(cd!=="not_granted")sample=null}
+  }
+  if(g!==sp.g)return J({speech:""});
+  if(kb)return J(kb);
+  try{o=await Promise.race([wiki(c),new Promise(function(r){setTimeout(function(){r(null)},8000)})]);if(o)return J(o)}catch(e){}
+  return J({lang:"en-IN",speech:(KEY()?"Your AI key did not work ("+((kerr&&kerr.message)||kerr||"unknown")+"). 400 or 403 usually means a wrong key, 429 means the free limit is used up. ":"")+"I'm in offline mode. I can still calculate, tell the time and show JEE formula sheets for physics, chemistry and maths. Full answers need a working AI key."})
+}
+async function ask(c,img,disp){
+  busy=true;say(disp||c,1);try{speechSynthesis.cancel()}catch(e){}newSp("");
+  var g=sp.g;
+  try{
+    var ctx=hist.slice(-4).map(function(h){return h[0]+": "+String(h[1]).slice(0,400)}).join("\n");
+    var opt={modelTier:img||c.split(" ").length>3||SHEETQ.test(c)?"default":"quick",cache:false,onText:function(e){if(g===sp.g)stream(e.text||"")}};if(img)opt.images=[img];
+    var prompt=SYS+"\nNow: "+new Date().toLocaleString()+"\nPreferred language: "+(LANG||"same as the user")+"\n"+(ctx?"Recent conversation:\n"+ctx+"\n":"")+"Sheet on screen: "+(last?last.title:"none")+". "+"User: "+c+"\nBujji:";
+    var out=await chain(c,prompt,opt,g);
+    if(g!==sp.g)return;
+    var raw=((out&&out.text)||"").replace(/```(json)?/gi,"").trim(),o=null;
+    try{o=JSON.parse(raw.slice(raw.indexOf("{"),raw.lastIndexOf("}")+1))}catch(x){}
+    var a=(o&&o.speech)||(raw&&raw[0]!=="{"?raw:"")||"I couldn’t put that together. Please ask again.";
+    if(o&&o.lang)sp.lang=o.lang;
+    hist.push(["User",c],["Bujji",a]);
+    var ns=o&&o.sheet&&o.sheet.sections&&o.sheet.sections.length;
+    if(ns)last=o.sheet;
+    mkLinks(o&&o.links);
+    if(o&&o.pdf&&last){if(ns)showSheet(last);await pdf(last,"")}
+    else{
+      say(a,1);sp.fin=true;enq(a.slice(sp.n));if(sp.pend<=0)done();
+      if(ns)await showSheet(last)
+    }
+  }catch(e){
+    if(g!==sp.g)return;
+    reply(e&&e.code==="not_granted"?"I need AI access to answer. Please allow it when asked.":e&&e.code==="rate_limited"?"Give me a moment.":"I couldn’t reach my AI link.")
+  }
+}
+
+function pick(){
+  var v=speechSynthesis.getVoices();
+  voice=v.find(function(x){return /^en-GB/i.test(x.lang)&&/daniel|ryan|george|uk english male/i.test(x.name)})||v.find(function(x){return /^en-GB/i.test(x.lang)})||v.find(function(x){return /^en-IN/i.test(x.lang)})||v.find(function(x){return /^en/i.test(x.lang)})||null
+}
+if(window.speechSynthesis){pick();speechSynthesis.onvoiceschanged=pick}
+
+var gen=0,sp={n:0,pend:0,fin:false,lang:"",g:0,said:""};
+function newSp(l){sp={n:0,pend:0,fin:false,lang:l||"",g:++gen,said:""}}
+var GEN="male",vHit=false;
+try{GEN=localStorage.getItem("jg")||"male"}catch(e){}
+var FEM=/female|woman|zira|samantha|susan|hazel|aria|jenny|libby|sonia|karen|moira|tessa|fiona|victoria|heera|neerja|swara|veena|lekha|kalpana|priya|shruti/i,MAL=/(^|[^a-z])male|daniel|ryan|george|james|david|mark|guy|ravi|hemant|prabhat|rishi|alex|fred|thomas/i;
+var VW=/voice|speak|talk|sound|आवाज|గొంతు|స్వరం|குரல்|ಧ್ವನಿ|ശബ്ദ|কণ্ঠ/i,FW=/\b(female|woman|girl|lady)\b|महिला|लड़की|औरत|స్త్రీ|అమ్మాయి|ఆడ|பெண்|ಹೆಣ್ಣು|സ്ത്രീ|মহিলা/i,MW=/\b(male|man|boy|guy)\b|पुरुष|लड़का|आदमी|పురుష|అబ్బాయి|మగ|ஆண்|ಗಂಡು|പുരുഷ|পুরুষ/i;
+function voiceFor(l){
+  var all=window.speechSynthesis?speechSynthesis.getVoices():[],lg=(l||"en").toLowerCase(),p=lg.slice(0,2),re=GEN==="female"?FEM:MAL;
+  var pool=all.filter(function(x){return x.lang.toLowerCase().replace("_","-").indexOf(p)===0});
+  pool.sort(function(x,y){function k(v){var c=v.lang.toLowerCase();return c===lg?0:p==="en"&&/^en-gb/.test(c)?1:p==="en"&&/^en-in/.test(c)?2:3}return k(x)-k(y)});
+  var m=pool.find(function(x){return re.test(x.name)});
+  vHit=!!m;return m||pool[0]||null
+}
+function done(){speaking=false;busy=false;qu=Date.now()+700}
+function enq(t,l){
+  var sy=window.speechSynthesis;if(!sy||!t||!t.trim())return;
+  var g=sp.g,u=new SpeechSynthesisUtterance(t.trim().replace(/bh?ujj?[iy]/gi,"Boojee")),v=voiceFor(l||sp.lang);
+  if(v)u.voice=v;u.lang=v?v.lang:(l||sp.lang||"en-IN");u.rate=1.08;u.volume=.85;u.pitch=vHit?1:GEN==="female"?1.25:.85;
+  u.onboundary=function(){bump=.35};
+  function fin(){if(g!==sp.g)return;if(--sp.pend<=0&&sp.fin)done()}
+  u.onend=fin;
+  u.onerror=function(e){if(e.error==="not-allowed")say(t+"\n(Touch the screen once so I can speak.)",1);fin()};
+  sp.said=(sp.said||"")+" "+t;
+  sp.pend++;speaking=true;sy.speak(u)
+}
+function reply(txt,l){
+  say(txt,1);try{speechSynthesis.cancel()}catch(e){}
+  newSp(l||"en-IN");sp.fin=true;
+  if(!window.speechSynthesis||!txt){done();return}
+  enq(txt)
+}
+function stopTalk(){try{speechSynthesis.cancel()}catch(e){}sp.g=++gen;sp.pend=0;speaking=false;busy=false}
+
+/* ---------- formula sheet and PDF ---------- */
+var sheetEl=document.getElementById("sheet"),sheetOn=0,mix=0;
+async function mjReady(){
+  for(var i=0;i<100&&!(window.MathJax&&window.MathJax.tex2svgPromise);i++)await new Promise(function(r){setTimeout(r,100)});
+  try{await window.MathJax.startup.promise}catch(e){}
+}
+async function showSheet(sh){
+  if(!sh){sheetOn=0;sheetEl.hidden=true;sheetEl.innerHTML="";document.body.classList.remove("sh");return}
+  sheetOn=1;sheetEl.innerHTML="";
+  var h=document.createElement("h2");h.textContent=sh.title||"Formulas";sheetEl.appendChild(h);
+  sheetEl.hidden=false;sheetEl.scrollTop=0;document.body.classList.add("sh");
+  await mjReady();
+  for(var s of sh.sections||[]){
+    var h3=document.createElement("h3");h3.textContent=s.h||"";sheetEl.appendChild(h3);
+    for(var it of s.items||[]){
+      var r=document.createElement("div"),l=document.createElement("span"),f=document.createElement("span");
+      r.className="r";l.className="l";f.className="f";l.textContent=it.l||"";
+      if(it.t){try{f.appendChild(await window.MathJax.tex2svgPromise(it.t))}catch(e){f.textContent=it.t}}
+      if(it.n){var nn=document.createElement("div");nn.className="n";nn.textContent=it.n;f.appendChild(nn)}
+      r.appendChild(l);r.appendChild(f);sheetEl.appendChild(r)
+    }
+  }
+}
+async function texPng(tex,fs){
+  var n=await window.MathJax.tex2svgPromise(tex),s=n.querySelector("svg"),vb=s.getAttribute("viewBox").split(/[ ,]+/).map(Number),k=fs/1000,w=vb[2]*k,h=vb[3]*k;
+  s.setAttribute("width",w);s.setAttribute("height",h);
+  var xml=new XMLSerializer().serializeToString(s).replace(/currentColor/g,"#111");
+  if(!/xmlns="/.test(xml))xml=xml.replace("<svg",'<svg xmlns="http://www.w3.org/2000/svg"');
+  if(/xlink:href/.test(xml)&&!/xmlns:xlink/.test(xml))xml=xml.replace("<svg",'<svg xmlns:xlink="http://www.w3.org/1999/xlink"');
+  var img=new Image();
+  await new Promise(function(ok,no){img.onload=ok;img.onerror=no;img.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(xml)});
+  var z=3,c=document.createElement("canvas");c.width=Math.ceil(w*z);c.height=Math.ceil(h*z);
+  var x=c.getContext("2d");x.scale(z,z);x.drawImage(img,0,0,w,h);
+  return{u:c.toDataURL("image/png"),w:w,h:h}
+}
+var NA=/[^\x00-\x7f]/;
+function txtPng(str,fs,maxW,col){
+  var z=3,c=document.createElement("canvas"),x=c.getContext("2d"),f=fs+"px system-ui,'Noto Sans',sans-serif";
+  str=String(str||"");x.font=f;
+  var parts=/\s/.test(str)?str.split(/(\s+)/):Array.from(str),lines=[],cur="";
+  parts.forEach(function(w){var tst=cur+w;if(x.measureText(tst).width>maxW&&cur.trim()){lines.push(cur.trim());cur=w.replace(/^\s+/,"")}else cur=tst});
+  if(cur.trim())lines.push(cur.trim());
+  var lh=fs*1.4,h=Math.max(lines.length,1)*lh+2;
+  c.width=Math.ceil(maxW*z);c.height=Math.ceil(h*z);x=c.getContext("2d");x.scale(z,z);x.font=f;x.fillStyle=col||"#111";x.textBaseline="top";
+  lines.forEach(function(l,i){x.fillText(l,0,i*lh+1)});
+  return{u:c.toDataURL("image/png"),w:maxW,h:h}
+}
+async function pdf(sh,pre){
+  try{
+    var J=window.jspdf&&window.jspdf.jsPDF;
+    if(!J)throw new Error("pdf");
+    if(!dl&&window.claude)dl=await useCap("downloads");
+    if(!dl){reply("Downloads aren’t available in this view.");return}
+    await mjReady();
+    var d=new J({unit:"pt",format:"a4"}),PW=595,PH=842,M=48,LW=170,y=M;
+    var cl=function(s){return String(s||"").replace(/[^ -~]/g,"")};
+    var room=function(n){if(y+n>PH-M){d.addPage();y=M}};
+    d.setFont("helvetica","bold");d.setFontSize(20);d.setTextColor(20);
+    if(NA.test(sh.title||"")){var ti=txtPng(sh.title,20,PW-2*M,"#141414");d.addImage(ti.u,"PNG",M,y,ti.w,ti.h);y+=ti.h+24}else{d.text(cl(sh.title)||"Formulas",M,y+14);y+=40}
+    for(var s of sh.sections||[]){
+      room(48);d.setFont("helvetica","bold");d.setFontSize(12);d.setTextColor(10,110,150);d.setDrawColor(10,110,150);
+      if(NA.test(s.h||"")){var hi=txtPng(s.h,12,PW-2*M,"#0a6e96");d.addImage(hi.u,"PNG",M,y,hi.w,hi.h);d.line(M,y+hi.h+4,PW-M,y+hi.h+4);y+=hi.h+18}else{d.text(cl(s.h).toUpperCase(),M,y+10);d.line(M,y+16,PW-M,y+16);y+=30}
+      for(var it of s.items||[]){
+        var im=null;if(it.t){try{im=await texPng(it.t,17)}catch(e){}}
+        var mw=PW-2*M-LW,sc=im?Math.min(1,mw/im.w):1,fh=im?im.h*sc:0;
+        var nt=it.n?txtPng(it.n,10,mw,"#333"):null,lb=NA.test(it.l||"")?txtPng(it.l,10,LW-12,"#555"):null;
+        var h=Math.max(fh+(nt?nt.h+(fh?4:0):0),lb?lb.h:16,16)+10;
+        room(h);
+        if(lb)d.addImage(lb.u,"PNG",M,y+5,lb.w,lb.h);else{d.setFont("helvetica","normal");d.setFontSize(10);d.setTextColor(90);d.text(d.splitTextToSize(cl(it.l),LW-12),M,y+13)}
+        if(im)d.addImage(im.u,"PNG",M+LW,y+5,im.w*sc,im.h*sc);
+        if(nt)d.addImage(nt.u,"PNG",M+LW,y+5+fh+(fh?4:0),nt.w,nt.h);
+        y+=h
+      }
+      y+=8
+    }
+    var np=d.getNumberOfPages();
+    for(var p=1;p<=np;p++){d.setPage(p);d.setFont("helvetica","normal");d.setFontSize(8);d.setTextColor(140);d.text("Bujji formula sheet  |  page "+p+" of "+np,M,PH-24)}
+    var nm=(cl(sh.title).replace(/[^a-zA-Z0-9 ]+/g,"").trim().replace(/ +/g,"-")||"formulas").toLowerCase()+".pdf";
+    reply((pre?pre+" ":"")+"Your PDF is ready. Please confirm the download.");
+    await dl.save({filename:nm,data:d.output("blob")})
+  }catch(e){
+    var cd=e&&e.code;
+    reply(cd==="declined"?"No problem, I won’t save it.":"I couldn’t make that PDF.")
+  }
+}
+
+/* Voice input. Inside claude.ai a page can't open the microphone itself, so the platform's dictation is used. It can only start from a real touch or key press, so the whole screen is the trigger (no button); after that it is voice only. */
+var dict=null,unlocked=false,warmed=false,buf="",bt,live=false,retry=0,LANG="";
+try{LANG=localStorage.getItem("jl")||""}catch(e){}
+var STOP=/^(stop|quiet|silence|shut up|enough|cancel|ruko|bas|चुप|रुको|बस|ఆపు|ఆపండి|நிறுத்து|நிறுத்துங்கள்|ನಿಲ್ಲಿಸು|നിർത്തൂ|থামো|থামুন|para|arrête|stopp)$/i;
+var LANGS=[["","Auto"],["en","English"],["hi","हिन्दी"],["te","తెలుగు"],["ta","தமிழ்"],["kn","ಕನ್ನಡ"],["ml","മലയാളം"],["bn","বাংলা"],["mr","मराठी"],["gu","ગુજરાતી"],["pa","ਪੰਜਾਬੀ"],["ur","اردو"],["es","Español"],["fr","Français"],["de","Deutsch"],["pt","Português"],["it","Italiano"],["ru","Русский"],["zh","中文"],["ja","日本語"],["ko","한국어"],["ar","العربية"],["tr","Türkçe"],["id","Indonesia"],["th","ไทย"],["vi","Tiếng Việt"],["nl","Nederlands"]];
+var sel=document.getElementById("lang");
+LANGS.forEach(function(l){var o=document.createElement("option");o.value=l[0];o.textContent=l[1];sel.appendChild(o)});
+sel.value=LANG;
+["pointerdown","keydown"].forEach(function(ev){sel.addEventListener(ev,function(e){e.stopPropagation()})});
+function langOpt(){return LANG?{language:LANG}:undefined}
+function go(){dict.start(langOpt()).then(function(){retry=0;if(!warmed){warmed=true;warm()}}).catch(needTouch)}
+sel.addEventListener("change",function(){
+  LANG=sel.value;try{localStorage.setItem("jl",LANG)}catch(e){}
+  say(LANG?"Language set. Speak now.":"Language: automatic.",1);
+  if(dict){try{if(dict.active())dict.stop().catch(function(){});go()}catch(e){needTouch(e)}}
+  else if(rec){try{rec.stop()}catch(e){}}
+});
+function hear(tx,fin){
+  tx=(tx||"").trim();if(!tx)return;
+  if(speaking||Date.now()<qu){
+    var z=tx.toLowerCase().replace(/[.!?,।]/g,"").trim();
+    if(z.split(" ").length<=4&&isStop(z)){stopTalk();buf="";clearTimeout(bt);say("Stopped.",1);return}
+    if(echo(tx)&&!WAKE.test(tx))return;
+    if(!fin){if(speaking&&z.split(" ").length>=2){stopTalk();say(tx,1)}return}
+  }
+  if(!fin){if(!busy)say((buf+" "+tx).trim(),1);return}
+  buf=(buf+" "+tx).trim();clearTimeout(bt);
+  bt=setTimeout(function(){var s=buf;buf="";heard(s)},450)
+}
+function needTouch(e){
+  var c=e&&e.code;
+  if(c==="not_granted")say("Dictation access was declined. Allow it in this page’s Permissions menu, then touch the screen.",1);
+  else if(c==="unavailable"&&LANG){LANG="";sel.value="";say("That language isn’t available for voice input here. Switched to automatic. Touch the screen.",1)}
+  else if(c==="unavailable")say("Voice input isn’t available in this view. Open the link in desktop Chrome.",1);
+  else if(c==="rate_limited")say("The microphone is busy. Touch the screen to try again.",1);
+  else say("Touch the screen once to start listening.",1)
+}
+function begin(){
+  if(!dict||dict.active())return;
+  try{go()}catch(e){needTouch(e)}
+}
+function gesture(){
+  if(!unlocked){unlocked=true;try{var u=new SpeechSynthesisUtterance(" ");u.volume=0;speechSynthesis.speak(u)}catch(e){}}
+  begin()
+}
+["pointerdown","keydown","touchstart","click"].forEach(function(ev){addEventListener(ev,gesture)});
+function initVoice(){
+  var p=window.claude?useCap("dictation"):Promise.resolve(null);
+  p.then(function(d){
+    if(!d){if(SR)listen();else say("Voice input isn’t available in this view. Open the link in desktop Chrome.",1);return}
+    dict=d;setTimeout(begin,300);
+    d.onPartial(function(e){hear(e.text,false)});
+    d.onFinal(function(e){hear(e.text,true)});
+    d.onState(function(e){
+      live=e.state==="listening"||e.state==="starting";
+      if(e.state==="listening"){if(!busy&&!speaking)say("Listening. Speak in any language.",1)}
+      else if(e.state==="idle"&&e.reason){
+        var r=e.reason;
+        if(r==="not_granted")say("Dictation access was declined. Allow it in this page’s Permissions menu.",1);
+        else if(r==="viewer_stopped")say("Touch the screen to resume listening.",1);
+        else if(r!=="stopped"&&r!=="hidden"&&r!=="unavailable"){setTimeout(begin,Math.min(1000*(++retry),8000))}
+      }
+    });
+    say("Touch the screen once to start listening.",1)
+  }).catch(function(){say("Voice input isn’t available in this view.",1)})
+}
+
+document.addEventListener("visibilitychange",function(){if(!document.hidden)begin()});
+setInterval(function(){if(dict&&!dict.active()&&!document.hidden){try{dict.start(langOpt()).catch(function(){})}catch(e){}}},4000);
+var tx=document.getElementById("tx");
+["pointerdown","keydown"].forEach(function(ev){tx.addEventListener(ev,function(e){e.stopPropagation()})});
+tx.addEventListener("keydown",function(e){
+  if(e.key!=="Enter")return;var v=tx.value.trim();if(!v)return;tx.value="";
+  gesture();stopTalk();act(v)
+});
+
+/* keep the screen awake and the mic alive */
+function lock(){try{navigator.wakeLock.request("screen").catch(function(){})}catch(e){}}
+document.addEventListener("visibilitychange",function(){if(!document.hidden){lock();if(micOK&&rec)start()}});
+lock();
+
+/* ask for AI consent once, early, so it never interrupts a conversation */
+function warm(){
+  try{if(window.claude)useCap("sample").then(function(s){sample=s;if(s)s("Reply with the single word OK.",{modelTier:"quick"}).catch(function(){})}).catch(function(){})}catch(e){}
+}
+
+/* ---------- animation ---------- */
+function frame(now){
+  var t=(now-t0)/1000,i,a,x,y,rr;
+  state=busy&&!speaking?"think":speaking?"speak":live?"listen":"idle";
+  var tg=COL[state];for(i=0;i<3;i++)cur[i]+=(tg[i]-cur[i])*.06;
+  var tl=state==="speak"?.5+.35*Math.sin(t*8)*Math.sin(t*3.7):state==="listen"?.28:state==="think"?.4:.08;
+  lvl+=(tl-lvl)*.08;bump*=.85;
+  var L=Math.max(0,lvl+bump),k=state==="think"?3.2:state==="idle"?.6:1;
+  mix+=(sheetOn-mix)*.08;var cx=W/2,cy=H*(.42-.24*mix),R=Math.min(W*.9,H*.7)*(.3-.13*mix);
+  g.clearRect(0,0,W,H);
+  var rg=g.createRadialGradient(cx,cy,0,cx,cy,R*1.1);
+  rg.addColorStop(0,rgba(.55+L*.3));rg.addColorStop(.3,rgba(.16+L*.14));rg.addColorStop(1,rgba(0));
+  g.fillStyle=rg;g.beginPath();g.arc(cx,cy,R*1.1,0,6.283);g.fill();
+  g.shadowColor=rgba(.9);g.shadowBlur=12;g.strokeStyle=rgba(.9);g.fillStyle=rgba(.9);
+  g.lineWidth=1.2;g.setLineDash([]);
+  var rot=t*.12*k,r0=R*1.3;
+  for(i=0;i<72;i++){
+    a=rot+i*6.283/72;var l=i%6?R*.04:R*.09;
+    g.beginPath();g.moveTo(cx+Math.cos(a)*r0,cy+Math.sin(a)*r0);g.lineTo(cx+Math.cos(a)*(r0+l),cy+Math.sin(a)*(r0+l));g.stroke()
+  }
+  g.lineWidth=3.5;
+  for(i=0;i<6;i++){a=-t*.3*k+i*1.0472;g.beginPath();g.arc(cx,cy,R*1.12,a,a+.72);g.stroke()}
+  g.lineWidth=1.4;g.setLineDash([2,9]);g.beginPath();g.arc(cx,cy,R*.95,t*.5*k,t*.5*k+6.283);g.stroke();g.setLineDash([]);
+  g.lineWidth=2;g.beginPath();g.arc(cx,cy,R*.86,t*.4*k,t*.4*k+4.2);g.stroke();
+  var amp=R*.05*(.4+L*2);g.beginPath();
+  for(i=0;i<=120;i++){
+    a=i*6.283/120;rr=R*.68+amp*(Math.sin(a*7+t*3*k)+.6*Math.sin(a*13-t*4.1*k));
+    x=cx+Math.cos(a)*rr;y=cy+Math.sin(a)*rr;i?g.lineTo(x,y):g.moveTo(x,y)
+  }
+  g.closePath();g.stroke();
+  g.lineWidth=1.6;g.beginPath();
+  for(i=0;i<3;i++){
+    a=-t*.6*k+i*2.0944;rr=R*(.36+L*.05);x=cx+Math.cos(a)*rr;y=cy+Math.sin(a)*rr;i?g.lineTo(x,y):g.moveTo(x,y)
+  }
+  g.closePath();g.stroke();
+  g.beginPath();g.arc(cx,cy,R*(.09+L*.05),0,6.283);g.fill();
+  g.shadowBlur=0;
+  for(i=0;i<P.length;i++){
+    var p=P[i],f=(p.r+t*p.s*(.05+L*.4))%1,rp=R*(.45+f*1.1);a=p.a+t*.04*k;
+    g.globalAlpha=(1-f)*.8;g.beginPath();g.arc(cx+Math.cos(a)*rp,cy+Math.sin(a)*rp,1.6,0,6.283);g.fill()
+  }
+  g.globalAlpha=1;
+  requestAnimationFrame(frame)
+}
+requestAnimationFrame(frame);
+initVoice();
+})();
+</script>
+</body>
+</html>
